@@ -28,7 +28,6 @@
 - Warm up once to compile; discard first run in timing. Reuse same process to keep XLA cache hot.
 - Fix seeds for any stochastic preprocessing (none in forward); pin versions of JAX/biotite.
 - Keep shapes constant per run to avoid recompiles; log `chunk_size`, `batch_size`, `n_q`, device count.
-- Measure with/without sharding (`pmap`/`pjit`) to show scaling; focus on single-device baselines.
 - Record command lines and env (`XLA_*`, `JAX_*` flags); store raw logs + summaries in `/benchmarks/` (not committed if large).
 
 ## Reporting
