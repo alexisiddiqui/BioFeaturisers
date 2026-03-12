@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
+from typing import Any
+
 import numpy as np
-from typing import Optional, Dict, Any
+
+_BACKBONE_ATOM_NAMES = {"N", "CA", "C", "O"}
 
 @dataclass
 class MinimalTopology:
@@ -57,6 +62,79 @@ class MinimalTopology:
         with open(filepath, "r") as f:
             data = json.load(f)
         return cls.from_dict(data)
+
+    @property
+    def atom_res_keys(self) -> np.ndarray:
+        return np.array(
+            [f"{chain}:{int(resid)}" for chain, resid in zip(self.chain_ids, self.res_ids, strict=True)],
+            dtype=str,
+        )
+
+    def residue_name_map(self) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for key, res_name in zip(self.atom_res_keys, self.res_names, strict=True):
+            if key not in mapping:
+                mapping[key] = str(res_name)
+        return mapping
+
+    @classmethod
+    def from_biotite(cls, atom_array: Any) -> "MinimalTopology":
+        atom_names = np.asarray(atom_array.atom_name, dtype=str)
+        res_names = np.asarray(atom_array.res_name, dtype=str)
+        res_ids = np.asarray(atom_array.res_id, dtype=int)
+        n_atoms = atom_names.shape[0]
+
+        if hasattr(atom_array, "chain_id"):
+            chain_ids = np.asarray(atom_array.chain_id, dtype=str)
+        else:
+            chain_ids = np.full(n_atoms, "", dtype=str)
+
+        if hasattr(atom_array, "element"):
+            elements = np.asarray(atom_array.element, dtype=str)
+        else:
+            # Best-effort fallback when element annotations are absent.
+            elements = np.char.upper(np.char.strip(np.char.array([name[:1] for name in atom_names])))
+
+        if hasattr(atom_array, "hetero"):
+            is_hetatm = np.asarray(atom_array.hetero, dtype=bool)
+        else:
+            is_hetatm = np.zeros(n_atoms, dtype=bool)
+
+        if hasattr(atom_array, "seg_id"):
+            seg_ids = np.asarray(atom_array.seg_id, dtype=str)
+        else:
+            seg_ids = np.full(n_atoms, "", dtype=str)
+
+        is_backbone = np.isin(atom_names, tuple(_BACKBONE_ATOM_NAMES))
+
+        res_unique_ids: list[str] = []
+        res_can_exchange: list[bool] = []
+        seen_keys: set[str] = set()
+        seen_chain: set[str] = set()
+        for chain_id, res_id, res_name in zip(chain_ids, res_ids, res_names, strict=True):
+            key = f"{chain_id}:{int(res_id)}"
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            res_unique_ids.append(key)
+
+            is_n_term = str(chain_id) not in seen_chain
+            if is_n_term:
+                seen_chain.add(str(chain_id))
+            res_can_exchange.append((str(res_name).upper() != "PRO") and (not is_n_term))
+
+        return cls(
+            atom_names=atom_names,
+            res_names=res_names,
+            res_ids=res_ids,
+            chain_ids=chain_ids,
+            elements=elements,
+            is_hetatm=is_hetatm,
+            is_backbone=is_backbone,
+            seg_ids=seg_ids,
+            res_unique_ids=np.asarray(res_unique_ids, dtype=str),
+            res_can_exchange=np.asarray(res_can_exchange, dtype=bool),
+        )
 
     # Temporary Biotite dummy integration
     @classmethod
