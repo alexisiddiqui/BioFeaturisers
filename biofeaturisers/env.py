@@ -30,7 +30,7 @@ class ComputeConfig:
     backend: Backend = Backend.JAX
     device: Device = Device.AUTO
     gpu_index: int = 0
-    disable_preallocation: bool = False
+    disable_preallocation: bool = True
     enable_x64: bool = False
 
     def __post_init__(self) -> None:
