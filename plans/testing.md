@@ -8,6 +8,10 @@
 - Gradient correctness is verified via finite-difference (FD) checks against `jax.grad`.
 - Tolerances: `atol=1e-5` for float32 forward values, `rtol=1e-3` for FD gradient checks.
 
+## Test (Real data) fixtures:
+- '5PTI' BPTI from PDB - pfs added to tests/BPTI_expt_Pfs.dat
+- 'SASDGM5' from https://www.sasbdb.org/data/SASDGM5/
+
 ---
 
 ## 1. `core/safe_math.py`
