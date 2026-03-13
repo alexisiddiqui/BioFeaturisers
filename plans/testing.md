@@ -9,6 +9,7 @@
 - Tolerances: `atol=1e-5` for float32 forward values, `rtol=1e-3` for FD gradient checks.
 
 ## Test (Real data) fixtures for regression testing:
+- '1UBQ' from PDB
 - '5PTI' BPTI from PDB - pfs added to tests/BPTI_expt_Pfs.dat
 - 'SASDGM5' from https://www.sasbdb.org/data/SASDGM5/ - includes structure and SAXS data
 

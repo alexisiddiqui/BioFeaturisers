@@ -19,6 +19,8 @@ def test_hdx_features_save_load_roundtrip(
         output_index=simple_output_index,
         amide_N_idx=jnp.asarray([0], dtype=jnp.int32),
         amide_H_idx=jnp.asarray([0], dtype=jnp.int32),
+        amide_CA_idx=jnp.asarray([1], dtype=jnp.int32),
+        amide_prev_C_idx=jnp.asarray([0], dtype=jnp.int32),
         heavy_atom_idx=jnp.asarray([0, 1], dtype=jnp.int32),
         backbone_O_idx=jnp.asarray([1], dtype=jnp.int32),
         excl_mask_c=jnp.asarray([[1.0, 0.0]], dtype=jnp.float32),
@@ -34,6 +36,7 @@ def test_hdx_features_save_load_roundtrip(
     loaded = HDXFeatures.load(str(prefix))
 
     np.testing.assert_array_equal(np.asarray(loaded.amide_N_idx), np.asarray(features.amide_N_idx))
+    np.testing.assert_array_equal(np.asarray(loaded.amide_CA_idx), np.asarray(features.amide_CA_idx))
     np.testing.assert_array_equal(np.asarray(loaded.excl_mask_c), np.asarray(features.excl_mask_c))
     np.testing.assert_array_equal(loaded.res_keys, features.res_keys)
     np.testing.assert_array_equal(
