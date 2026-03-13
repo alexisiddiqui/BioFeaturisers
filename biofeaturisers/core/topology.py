@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
+import chex
+import jax.numpy as jnp
 import numpy as np
+from jaxtyping import Array, Bool, Int
 
 _BACKBONE_ATOMS = frozenset({"N", "CA", "C", "O"})
 
@@ -20,17 +23,34 @@ class MinimalTopology:
 
     atom_names: np.ndarray
     res_names: np.ndarray
-    res_ids: np.ndarray
+    res_ids: Int[Array, "n_atoms"]
     chain_ids: np.ndarray
     element: np.ndarray
-    is_hetatm: np.ndarray
-    is_backbone: np.ndarray
+    is_hetatm: Bool[Array, "n_atoms"]
+    is_backbone: Bool[Array, "n_atoms"]
     seg_ids: np.ndarray
     res_unique_ids: np.ndarray
-    res_can_exchange: np.ndarray
+    res_can_exchange: Bool[Array, "n_residues"]
 
     def __post_init__(self) -> None:
-        n_atoms = self.atom_names.shape[0]
+        self.atom_names = _as_str_array(self.atom_names)
+        self.res_names = _as_str_array(self.res_names)
+        self.chain_ids = _as_str_array(self.chain_ids)
+        self.element = _as_str_array(self.element)
+        self.seg_ids = _as_str_array(self.seg_ids)
+        self.res_unique_ids = _as_str_array(self.res_unique_ids)
+
+        self.res_ids = jnp.asarray(self.res_ids, dtype=jnp.int32)
+        self.is_hetatm = jnp.asarray(self.is_hetatm, dtype=jnp.bool_)
+        self.is_backbone = jnp.asarray(self.is_backbone, dtype=jnp.bool_)
+        self.res_can_exchange = jnp.asarray(self.res_can_exchange, dtype=jnp.bool_)
+
+        chex.assert_rank(self.res_ids, 1)
+        chex.assert_rank(self.is_hetatm, 1)
+        chex.assert_rank(self.is_backbone, 1)
+        chex.assert_rank(self.res_can_exchange, 1)
+
+        n_atoms = int(self.atom_names.shape[0])
         atom_fields = (
             ("res_names", self.res_names),
             ("res_ids", self.res_ids),
@@ -41,11 +61,12 @@ class MinimalTopology:
             ("seg_ids", self.seg_ids),
         )
         for field_name, field_value in atom_fields:
-            if field_value.shape[0] != n_atoms:
+            if int(field_value.shape[0]) != n_atoms:
                 raise ValueError(
                     f"{field_name} length {field_value.shape[0]} != atom_names length {n_atoms}"
                 )
-        if self.res_can_exchange.shape[0] != self.res_unique_ids.shape[0]:
+
+        if int(self.res_can_exchange.shape[0]) != int(self.res_unique_ids.shape[0]):
             raise ValueError("res_can_exchange length must match res_unique_ids length")
 
     def to_json(self) -> dict:
@@ -53,14 +74,14 @@ class MinimalTopology:
         return {
             "atom_names": self.atom_names.tolist(),
             "res_names": self.res_names.tolist(),
-            "res_ids": self.res_ids.tolist(),
+            "res_ids": np.asarray(self.res_ids).tolist(),
             "chain_ids": self.chain_ids.tolist(),
             "element": self.element.tolist(),
-            "is_hetatm": self.is_hetatm.tolist(),
-            "is_backbone": self.is_backbone.tolist(),
+            "is_hetatm": np.asarray(self.is_hetatm).tolist(),
+            "is_backbone": np.asarray(self.is_backbone).tolist(),
             "seg_ids": self.seg_ids.tolist(),
             "res_unique_ids": self.res_unique_ids.tolist(),
-            "res_can_exchange": self.res_can_exchange.tolist(),
+            "res_can_exchange": np.asarray(self.res_can_exchange).tolist(),
         }
 
     @classmethod
@@ -81,7 +102,7 @@ class MinimalTopology:
 
     @classmethod
     def from_biotite(
-        cls, atom_array: object, exchange_mask: Iterable[str] | None = None
+        cls, atom_array: Any, exchange_mask: Iterable[str] | None = None
     ) -> "MinimalTopology":
         """Create topology from a biotite AtomArray-like object."""
 
