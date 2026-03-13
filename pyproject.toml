@@ -5,10 +5,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "biotite>=1.6.0",
     "chex>=0.1.91",
     "jax>=0.9.1",
+    "jax-tqdm>=0.4.0",
     "jaxtyping>=0.3.9",
     "matplotlib>=3.10.8",
     "numpy>=2.4.3",
+    "pytest>=9.0.2",
     "tqdm>=4.67.3",
 ]
