@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -65,8 +67,36 @@ def _validate_indices(name: str, idx: Array, n_atoms: int, *, allow_minus_one: b
         raise ValueError(f"{name} contains index >= coords atom count ({n_atoms})")
 
 
+def _build_amide_and_env_coords(
+    coords: Float[Array, "n_atoms 3"],
+    amide_n_idx: Array,
+    amide_h_idx: Array,
+    amide_ca_idx: Array,
+    amide_prev_c_idx: Array,
+    heavy_idx: Array,
+    backbone_o_idx: Array,
+) -> tuple[Array, Array, Array, Array]:
+    """Build probe/environment coordinates with synthetic amide-H fallback."""
+    amide_n = coords[amide_n_idx]
+    amide_ca = coords[amide_ca_idx]
+    amide_prev_c = coords[amide_prev_c_idx]
+
+    v_ca = _normalize_rows(amide_ca - amide_n)
+    v_prev = _normalize_rows(amide_prev_c - amide_n)
+    amide_h_synth = amide_n + _AMIDE_H_BOND_LENGTH * _normalize_rows(v_ca + v_prev)
+
+    coords_aug = jnp.concatenate((coords, amide_h_synth), axis=0)
+    synth_h_idx = coords.shape[0] + jnp.arange(amide_n_idx.shape[0], dtype=jnp.int32)
+    effective_h_idx = jnp.where(amide_h_idx >= 0, amide_h_idx, synth_h_idx)
+
+    amide_h = coords_aug[effective_h_idx]
+    heavy = coords_aug[heavy_idx]
+    backbone_o = coords_aug[backbone_o_idx]
+    return amide_n, amide_h, heavy, backbone_o
+
+
 @jax.jit
-def _hdx_forward_bucketed(
+def _hdx_forward_dense(
     coords: Float[Array, "atom_bucket 3"],
     amide_n_idx: Array,
     amide_h_idx: Array,
@@ -84,21 +114,15 @@ def _hdx_forward_bucketed(
     steepness_c: float,
     steepness_h: float,
 ) -> tuple[Array, Array, Array]:
-    amide_n = coords[amide_n_idx]
-    amide_ca = coords[amide_ca_idx]
-    amide_prev_c = coords[amide_prev_c_idx]
-
-    v_ca = _normalize_rows(amide_ca - amide_n)
-    v_prev = _normalize_rows(amide_prev_c - amide_n)
-    amide_h_synth = amide_n + _AMIDE_H_BOND_LENGTH * _normalize_rows(v_ca + v_prev)
-
-    coords_aug = jnp.concatenate((coords, amide_h_synth), axis=0)
-    synth_h_idx = coords.shape[0] + jnp.arange(amide_n_idx.shape[0], dtype=jnp.int32)
-    effective_h_idx = jnp.where(amide_h_idx >= 0, amide_h_idx, synth_h_idx)
-
-    heavy = coords_aug[heavy_idx]
-    backbone_o = coords_aug[backbone_o_idx]
-    amide_h = coords_aug[effective_h_idx]
+    amide_n, amide_h, heavy, backbone_o = _build_amide_and_env_coords(
+        coords=coords,
+        amide_n_idx=amide_n_idx,
+        amide_h_idx=amide_h_idx,
+        amide_ca_idx=amide_ca_idx,
+        amide_prev_c_idx=amide_prev_c_idx,
+        heavy_idx=heavy_idx,
+        backbone_o_idx=backbone_o_idx,
+    )
 
     dist_c = dist_matrix_asymmetric(amide_n, heavy)
     dist_h = dist_matrix_asymmetric(amide_h, backbone_o)
@@ -107,6 +131,141 @@ def _hdx_forward_bucketed(
     nh = jnp.sum(sigmoid_switch(dist_h, cutoff_h, steepness_h) * excl_mask_h, axis=-1)
     ln_pf = beta_0 + beta_c * nc + beta_h * nh
     return nc, nh, ln_pf
+
+
+def _chunked_contact_counts(
+    probe_coords: Float[Array, "n_probe 3"],
+    env_coords: Float[Array, "n_env 3"],
+    excl_mask: Float[Array, "n_probe n_env"],
+    cutoff: float,
+    steepness: float,
+    chunk_size: int,
+) -> Float[Array, "n_probe"]:
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be > 0 for chunked fallback")
+
+    n_probe = int(probe_coords.shape[0])
+    pad = (-n_probe) % chunk_size
+    probe_padded = jnp.pad(probe_coords, ((0, pad), (0, 0)))
+    mask_padded = jnp.pad(excl_mask, ((0, pad), (0, 0)))
+
+    n_chunks = probe_padded.shape[0] // chunk_size
+    probe_chunks = probe_padded.reshape((n_chunks, chunk_size, 3))
+    mask_chunks = mask_padded.reshape((n_chunks, chunk_size, mask_padded.shape[1]))
+
+    @jax.checkpoint
+    def _scan_body(_: None, chunk_data: tuple[Array, Array]) -> tuple[None, Array]:
+        probe_chunk, mask_chunk = chunk_data
+        dist = dist_matrix_asymmetric(probe_chunk, env_coords)
+        counts = jnp.sum(sigmoid_switch(dist, cutoff, steepness) * mask_chunk, axis=-1)
+        return None, counts
+
+    _, chunk_outputs = jax.lax.scan(_scan_body, None, (probe_chunks, mask_chunks))
+    return jnp.reshape(chunk_outputs, (-1,))[:n_probe]
+
+
+@partial(jax.jit, static_argnames=("chunk_size",))
+def _hdx_forward_chunked(
+    coords: Float[Array, "atom_bucket 3"],
+    amide_n_idx: Array,
+    amide_h_idx: Array,
+    amide_ca_idx: Array,
+    amide_prev_c_idx: Array,
+    heavy_idx: Array,
+    backbone_o_idx: Array,
+    excl_mask_c: Array,
+    excl_mask_h: Array,
+    beta_0: float,
+    beta_c: float,
+    beta_h: float,
+    cutoff_c: float,
+    cutoff_h: float,
+    steepness_c: float,
+    steepness_h: float,
+    chunk_size: int,
+) -> tuple[Array, Array, Array]:
+    amide_n, amide_h, heavy, backbone_o = _build_amide_and_env_coords(
+        coords=coords,
+        amide_n_idx=amide_n_idx,
+        amide_h_idx=amide_h_idx,
+        amide_ca_idx=amide_ca_idx,
+        amide_prev_c_idx=amide_prev_c_idx,
+        heavy_idx=heavy_idx,
+        backbone_o_idx=backbone_o_idx,
+    )
+
+    nc = _chunked_contact_counts(
+        probe_coords=amide_n,
+        env_coords=heavy,
+        excl_mask=excl_mask_c,
+        cutoff=cutoff_c,
+        steepness=steepness_c,
+        chunk_size=chunk_size,
+    )
+    nh = _chunked_contact_counts(
+        probe_coords=amide_h,
+        env_coords=backbone_o,
+        excl_mask=excl_mask_h,
+        cutoff=cutoff_h,
+        steepness=steepness_h,
+        chunk_size=chunk_size,
+    )
+    ln_pf = beta_0 + beta_c * nc + beta_h * nh
+    return nc, nh, ln_pf
+
+
+def wan_grid_search(
+    dist_c: Float[Array, "n_frames n_probe n_heavy"],
+    dist_h: Float[Array, "n_frames n_probe n_backbone_o"],
+    excl_mask_c: Float[Array, "n_probe n_heavy"],
+    excl_mask_h: Float[Array, "n_probe n_backbone_o"],
+    x_c_grid: Float[Array, "n_x_c"],
+    x_h_grid: Float[Array, "n_x_h"],
+    b_grid: Float[Array, "n_b"],
+) -> tuple[Float[Array, "n_x_c n_b n_probe"], Float[Array, "n_x_h n_b n_probe"]]:
+    """Evaluate Wan-style Nc/Nh means over cached distance grids."""
+    dist_c_arr = jnp.asarray(dist_c, dtype=jnp.float32)
+    dist_h_arr = jnp.asarray(dist_h, dtype=jnp.float32)
+    excl_c = jnp.asarray(excl_mask_c, dtype=jnp.float32)
+    excl_h = jnp.asarray(excl_mask_h, dtype=jnp.float32)
+    x_c = jnp.asarray(x_c_grid, dtype=jnp.float32)
+    x_h = jnp.asarray(x_h_grid, dtype=jnp.float32)
+    b_values = jnp.asarray(b_grid, dtype=jnp.float32)
+
+    if dist_c_arr.ndim != 3:
+        raise ValueError("dist_c must be rank-3 with shape (n_frames, n_probe, n_heavy)")
+    if dist_h_arr.ndim != 3:
+        raise ValueError("dist_h must be rank-3 with shape (n_frames, n_probe, n_backbone_o)")
+    if excl_c.ndim != 2 or excl_h.ndim != 2:
+        raise ValueError("excl_mask_c and excl_mask_h must be rank-2")
+    if x_c.ndim != 1 or x_h.ndim != 1 or b_values.ndim != 1:
+        raise ValueError("x_c_grid, x_h_grid, and b_grid must be rank-1")
+    if dist_c_arr.shape[0] != dist_h_arr.shape[0]:
+        raise ValueError("dist_c and dist_h frame counts must match")
+    if dist_c_arr.shape[1] != dist_h_arr.shape[1]:
+        raise ValueError("dist_c and dist_h probe counts must match")
+    if dist_c_arr.shape[1:] != excl_c.shape:
+        raise ValueError("dist_c trailing shape must match excl_mask_c")
+    if dist_h_arr.shape[1:] != excl_h.shape:
+        raise ValueError("dist_h trailing shape must match excl_mask_h")
+
+    def _mean_contacts(
+        dist: Float[Array, "n_frames n_probe n_env"],
+        excl_mask: Float[Array, "n_probe n_env"],
+        x_grid: Float[Array, "n_x"],
+    ) -> Float[Array, "n_x n_b n_probe"]:
+        def _for_x(x_val: Float[Array, ""]) -> Float[Array, "n_b n_probe"]:
+            def _for_b(b_val: Float[Array, ""]) -> Float[Array, "n_probe"]:
+                contacts = sigmoid_switch(dist, x_val, b_val)
+                return jnp.mean(jnp.sum(contacts * excl_mask[None, :, :], axis=-1), axis=0)
+
+            return jax.vmap(_for_b)(b_values)
+
+        return jax.vmap(_for_x)(x_grid)
+
+    mean_nc = _mean_contacts(dist_c_arr, excl_c, x_c)
+    mean_nh = _mean_contacts(dist_h_arr, excl_h, x_h)
+    return mean_nc, mean_nh
 
 
 def hdx_forward(
@@ -166,24 +325,45 @@ def hdx_forward(
     excl_mask_c_pad = _pad_matrix(excl_mask_c, probe_bucket, heavy_bucket)
     excl_mask_h_pad = _pad_matrix(excl_mask_h, probe_bucket, backbone_o_bucket)
 
-    nc_pad, nh_pad, ln_pf_pad = _hdx_forward_bucketed(
-        coords=coords_pad,
-        amide_n_idx=amide_n_pad,
-        amide_h_idx=amide_h_pad,
-        amide_ca_idx=amide_ca_pad,
-        amide_prev_c_idx=amide_prev_c_pad,
-        heavy_idx=heavy_pad,
-        backbone_o_idx=backbone_o_pad,
-        excl_mask_c=excl_mask_c_pad,
-        excl_mask_h=excl_mask_h_pad,
-        beta_0=cfg.beta_0,
-        beta_c=cfg.beta_c,
-        beta_h=cfg.beta_h,
-        cutoff_c=cfg.cutoff_c,
-        cutoff_h=cfg.cutoff_h,
-        steepness_c=cfg.steepness_c,
-        steepness_h=cfg.steepness_h,
-    )
+    if cfg.chunk_size > 0:
+        nc_pad, nh_pad, ln_pf_pad = _hdx_forward_chunked(
+            coords=coords_pad,
+            amide_n_idx=amide_n_pad,
+            amide_h_idx=amide_h_pad,
+            amide_ca_idx=amide_ca_pad,
+            amide_prev_c_idx=amide_prev_c_pad,
+            heavy_idx=heavy_pad,
+            backbone_o_idx=backbone_o_pad,
+            excl_mask_c=excl_mask_c_pad,
+            excl_mask_h=excl_mask_h_pad,
+            beta_0=cfg.beta_0,
+            beta_c=cfg.beta_c,
+            beta_h=cfg.beta_h,
+            cutoff_c=cfg.cutoff_c,
+            cutoff_h=cfg.cutoff_h,
+            steepness_c=cfg.steepness_c,
+            steepness_h=cfg.steepness_h,
+            chunk_size=int(cfg.chunk_size),
+        )
+    else:
+        nc_pad, nh_pad, ln_pf_pad = _hdx_forward_dense(
+            coords=coords_pad,
+            amide_n_idx=amide_n_pad,
+            amide_h_idx=amide_h_pad,
+            amide_ca_idx=amide_ca_pad,
+            amide_prev_c_idx=amide_prev_c_pad,
+            heavy_idx=heavy_pad,
+            backbone_o_idx=backbone_o_pad,
+            excl_mask_c=excl_mask_c_pad,
+            excl_mask_h=excl_mask_h_pad,
+            beta_0=cfg.beta_0,
+            beta_c=cfg.beta_c,
+            beta_h=cfg.beta_h,
+            cutoff_c=cfg.cutoff_c,
+            cutoff_h=cfg.cutoff_h,
+            steepness_c=cfg.steepness_c,
+            steepness_h=cfg.steepness_h,
+        )
 
     return {
         "Nc": nc_pad[:n_probe],
@@ -192,5 +372,4 @@ def hdx_forward(
     }
 
 
-__all__ = ["bucket_size", "hdx_forward"]
-
+__all__ = ["bucket_size", "hdx_forward", "wan_grid_search"]

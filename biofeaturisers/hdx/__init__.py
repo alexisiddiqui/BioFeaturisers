@@ -2,7 +2,7 @@
 
 from .features import HDXFeatures
 from .featurise import build_exclusion_mask, featurise
-from .forward import bucket_size, hdx_forward
+from .forward import bucket_size, hdx_forward, wan_grid_search
 from .hdxrate import compute_kint, predict_uptake
 from .predict import predict
 
@@ -15,4 +15,5 @@ __all__ = [
     "hdx_forward",
     "predict",
     "predict_uptake",
+    "wan_grid_search",
 ]
