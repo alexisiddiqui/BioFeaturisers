@@ -13,11 +13,6 @@ from biofeaturisers.saxs.debye import saxs_six_partials
 from biofeaturisers.saxs.features import SAXSFeatures
 from tests.fixtures.numerical_helpers import make_linear_coords
 
-_RUN_SLOW = os.getenv("BIOFEATURISERS_RUN_SLOW", "0") == "1"
-pytestmark = pytest.mark.skipif(
-    not _RUN_SLOW,
-    reason="Set BIOFEATURISERS_RUN_SLOW=1 to run stress/JIT optional suites.",
-)
 
 
 def _make_features(simple_topology, simple_output_index, ff_vac, ff_excl, ff_water, q_values):

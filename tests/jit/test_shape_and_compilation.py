@@ -15,11 +15,6 @@ from biofeaturisers.hdx import forward as hdx_forward_module
 from biofeaturisers.hdx.featurise import featurise
 from biofeaturisers.hdx.forward import bucket_size, hdx_forward
 
-_RUN_SLOW = os.getenv("BIOFEATURISERS_RUN_SLOW", "0") == "1"
-pytestmark = pytest.mark.skipif(
-    not _RUN_SLOW,
-    reason="Set BIOFEATURISERS_RUN_SLOW=1 to run stress/JIT optional suites.",
-)
 
 
 def _load_1ubq_fragment():
