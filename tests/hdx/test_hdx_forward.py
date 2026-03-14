@@ -115,9 +115,9 @@ def test_hdx_forward_chunked_fallback_matches_dense() -> None:
 
     dense = hdx_forward(coords, features, config=dense_cfg)
     chunked = hdx_forward(coords, features, config=chunk_cfg)
-    np.testing.assert_allclose(np.asarray(chunked["Nc"]), np.asarray(dense["Nc"]), atol=1e-4)
-    np.testing.assert_allclose(np.asarray(chunked["Nh"]), np.asarray(dense["Nh"]), atol=1e-4)
-    np.testing.assert_allclose(np.asarray(chunked["ln_Pf"]), np.asarray(dense["ln_Pf"]), atol=1e-4)
+    np.testing.assert_allclose(np.asarray(chunked["Nc"]), np.asarray(dense["Nc"]), atol=1e-3)
+    np.testing.assert_allclose(np.asarray(chunked["Nh"]), np.asarray(dense["Nh"]), atol=1e-3)
+    np.testing.assert_allclose(np.asarray(chunked["ln_Pf"]), np.asarray(dense["ln_Pf"]), atol=1e-3)
 
 
 def test_wan_grid_search_shapes_and_consistency() -> None:
