@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from pathlib import Path
 
 import chex
 import jax.numpy as jnp
@@ -13,6 +11,8 @@ from jaxtyping import Array, Float, Int
 
 from biofeaturisers.core.output_index import OutputIndex
 from biofeaturisers.core.topology import MinimalTopology
+from biofeaturisers.io.load import load_feature_bundle, output_index_from_arrays
+from biofeaturisers.io.save import output_index_arrays, save_feature_bundle
 
 
 def _as_str_array(values: object) -> np.ndarray:
@@ -64,50 +64,26 @@ class SAXSFeatures:
 
     def save(self, prefix: str) -> None:
         """Persist static SAXS features as NPZ + topology JSON."""
-        prefix_path = Path(prefix)
-        prefix_path.parent.mkdir(parents=True, exist_ok=True)
-        features_path = prefix_path.parent / f"{prefix_path.name}_features.npz"
-        topology_path = prefix_path.parent / f"{prefix_path.name}_topology.json"
-
-        np.savez(
-            features_path,
-            atom_idx=np.asarray(self.atom_idx, dtype=np.int32),
-            ff_vac=np.asarray(self.ff_vac, dtype=np.float32),
-            ff_excl=np.asarray(self.ff_excl, dtype=np.float32),
-            ff_water=np.asarray(self.ff_water, dtype=np.float32),
-            solvent_acc=np.asarray(self.solvent_acc, dtype=np.float32),
-            q_values=np.asarray(self.q_values, dtype=np.float32),
-            chain_ids=self.chain_ids,
-            output_atom_mask=np.asarray(self.output_index.atom_mask, dtype=bool),
-            output_probe_mask=np.asarray(self.output_index.probe_mask, dtype=bool),
-            output_mask=np.asarray(self.output_index.output_mask, dtype=bool),
-            output_atom_idx=np.asarray(self.output_index.atom_idx, dtype=np.int32),
-            output_probe_idx=np.asarray(self.output_index.probe_idx, dtype=np.int32),
-            output_res_idx=np.asarray(self.output_index.output_res_idx, dtype=np.int32),
+        save_feature_bundle(
+            prefix=prefix,
+            topology=self.topology,
+            arrays={
+                "atom_idx": np.asarray(self.atom_idx, dtype=np.int32),
+                "ff_vac": np.asarray(self.ff_vac, dtype=np.float32),
+                "ff_excl": np.asarray(self.ff_excl, dtype=np.float32),
+                "ff_water": np.asarray(self.ff_water, dtype=np.float32),
+                "solvent_acc": np.asarray(self.solvent_acc, dtype=np.float32),
+                "q_values": np.asarray(self.q_values, dtype=np.float32),
+                "chain_ids": self.chain_ids,
+                **output_index_arrays(self.output_index),
+            },
         )
-
-        with topology_path.open("w", encoding="utf-8") as handle:
-            json.dump(self.topology.to_json(), handle)
 
     @classmethod
     def load(cls, prefix: str) -> "SAXSFeatures":
         """Load SAXS features from NPZ + topology JSON."""
-        prefix_path = Path(prefix)
-        features_path = prefix_path.parent / f"{prefix_path.name}_features.npz"
-        topology_path = prefix_path.parent / f"{prefix_path.name}_topology.json"
-
-        with topology_path.open("r", encoding="utf-8") as handle:
-            topology = MinimalTopology.from_json(json.load(handle))
-
-        data = np.load(features_path, allow_pickle=False)
-        output_index = OutputIndex(
-            atom_mask=data["output_atom_mask"],
-            probe_mask=data["output_probe_mask"],
-            output_mask=data["output_mask"],
-            atom_idx=data["output_atom_idx"],
-            probe_idx=data["output_probe_idx"],
-            output_res_idx=data["output_res_idx"],
-        )
+        topology, data = load_feature_bundle(prefix)
+        output_index = output_index_from_arrays(data)
 
         return cls(
             topology=topology,
@@ -120,4 +96,3 @@ class SAXSFeatures:
             q_values=data["q_values"],
             chain_ids=data["chain_ids"],
         )
-

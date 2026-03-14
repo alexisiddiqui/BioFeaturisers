@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from pathlib import Path
 
 import chex
 import jax.numpy as jnp
@@ -13,6 +11,8 @@ from jaxtyping import Array, Bool, Float, Int
 
 from biofeaturisers.core.output_index import OutputIndex
 from biofeaturisers.core.topology import MinimalTopology
+from biofeaturisers.io.load import load_feature_bundle, output_index_from_arrays
+from biofeaturisers.io.save import output_index_arrays, save_feature_bundle
 
 
 def _as_str_array(values: object) -> np.ndarray:
@@ -101,71 +101,48 @@ class HDXFeatures:
 
     def save(self, prefix: str) -> None:
         """Persist static HDX features as NPZ + topology JSON."""
-        prefix_path = Path(prefix)
-        prefix_path.parent.mkdir(parents=True, exist_ok=True)
-        features_path = prefix_path.parent / f"{prefix_path.name}_features.npz"
-        topology_path = prefix_path.parent / f"{prefix_path.name}_topology.json"
-
-        np.savez(
-            features_path,
-            amide_N_idx=np.asarray(self.amide_N_idx, dtype=np.int32),
-            amide_H_idx=np.asarray(self.amide_H_idx, dtype=np.int32),
-            heavy_atom_idx=np.asarray(self.heavy_atom_idx, dtype=np.int32),
-            backbone_O_idx=np.asarray(self.backbone_O_idx, dtype=np.int32),
-            excl_mask_c=np.asarray(self.excl_mask_c, dtype=np.float32),
-            excl_mask_h=np.asarray(self.excl_mask_h, dtype=np.float32),
-            res_keys=self.res_keys,
-            res_names=self.res_names,
-            can_exchange=np.asarray(self.can_exchange, dtype=bool),
-            output_atom_mask=np.asarray(self.output_index.atom_mask, dtype=bool),
-            output_probe_mask=np.asarray(self.output_index.probe_mask, dtype=bool),
-            output_mask=np.asarray(self.output_index.output_mask, dtype=bool),
-            output_atom_idx=np.asarray(self.output_index.atom_idx, dtype=np.int32),
-            output_probe_idx=np.asarray(self.output_index.probe_idx, dtype=np.int32),
-            output_res_idx=np.asarray(self.output_index.output_res_idx, dtype=np.int32),
-            has_kint=np.asarray(self.kint is not None, dtype=bool),
-            kint=(
-                np.asarray(self.kint, dtype=np.float32)
-                if self.kint is not None
-                else np.asarray([], dtype=np.float32)
-            ),
-            has_amide_geom=np.asarray(self.amide_CA_idx is not None, dtype=bool),
-            amide_CA_idx=(
-                np.asarray(self.amide_CA_idx, dtype=np.int32)
-                if self.amide_CA_idx is not None
-                else np.asarray([], dtype=np.int32)
-            ),
-            amide_prev_C_idx=(
-                np.asarray(self.amide_prev_C_idx, dtype=np.int32)
-                if self.amide_prev_C_idx is not None
-                else np.asarray([], dtype=np.int32)
-            ),
+        save_feature_bundle(
+            prefix=prefix,
+            topology=self.topology,
+            arrays={
+                "amide_N_idx": np.asarray(self.amide_N_idx, dtype=np.int32),
+                "amide_H_idx": np.asarray(self.amide_H_idx, dtype=np.int32),
+                "heavy_atom_idx": np.asarray(self.heavy_atom_idx, dtype=np.int32),
+                "backbone_O_idx": np.asarray(self.backbone_O_idx, dtype=np.int32),
+                "excl_mask_c": np.asarray(self.excl_mask_c, dtype=np.float32),
+                "excl_mask_h": np.asarray(self.excl_mask_h, dtype=np.float32),
+                "res_keys": self.res_keys,
+                "res_names": self.res_names,
+                "can_exchange": np.asarray(self.can_exchange, dtype=bool),
+                **output_index_arrays(self.output_index),
+                "has_kint": np.asarray(self.kint is not None, dtype=bool),
+                "kint": (
+                    np.asarray(self.kint, dtype=np.float32)
+                    if self.kint is not None
+                    else np.asarray([], dtype=np.float32)
+                ),
+                "has_amide_geom": np.asarray(self.amide_CA_idx is not None, dtype=bool),
+                "amide_CA_idx": (
+                    np.asarray(self.amide_CA_idx, dtype=np.int32)
+                    if self.amide_CA_idx is not None
+                    else np.asarray([], dtype=np.int32)
+                ),
+                "amide_prev_C_idx": (
+                    np.asarray(self.amide_prev_C_idx, dtype=np.int32)
+                    if self.amide_prev_C_idx is not None
+                    else np.asarray([], dtype=np.int32)
+                ),
+            },
         )
-
-        with topology_path.open("w", encoding="utf-8") as handle:
-            json.dump(self.topology.to_json(), handle)
 
     @classmethod
     def load(cls, prefix: str) -> "HDXFeatures":
         """Load HDX features from NPZ + topology JSON."""
-        prefix_path = Path(prefix)
-        features_path = prefix_path.parent / f"{prefix_path.name}_features.npz"
-        topology_path = prefix_path.parent / f"{prefix_path.name}_topology.json"
-
-        with topology_path.open("r", encoding="utf-8") as handle:
-            topology = MinimalTopology.from_json(json.load(handle))
-
-        data = np.load(features_path, allow_pickle=False)
-        output_index = OutputIndex(
-            atom_mask=data["output_atom_mask"],
-            probe_mask=data["output_probe_mask"],
-            output_mask=data["output_mask"],
-            atom_idx=data["output_atom_idx"],
-            probe_idx=data["output_probe_idx"],
-            output_res_idx=data["output_res_idx"],
-        )
-        kint = data["kint"] if bool(data["has_kint"]) else None
-        has_amide_geom = bool(data["has_amide_geom"]) if "has_amide_geom" in data.files else False
+        topology, data = load_feature_bundle(prefix)
+        output_index = output_index_from_arrays(data)
+        has_kint = bool(np.asarray(data["has_kint"]).item())
+        kint = data["kint"] if has_kint else None
+        has_amide_geom = bool(np.asarray(data["has_amide_geom"]).item()) if "has_amide_geom" in data else False
         amide_ca_idx = data["amide_CA_idx"] if has_amide_geom else None
         amide_prev_c_idx = data["amide_prev_C_idx"] if has_amide_geom else None
 

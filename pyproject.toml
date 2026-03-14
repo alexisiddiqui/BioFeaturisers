@@ -13,5 +13,10 @@ dependencies = [
     "matplotlib>=3.10.8",
     "numpy>=2.4.3",
     "pytest>=9.0.2",
+    "tomli>=2.2.1; python_version < '3.11'",
+    "typer>=0.17.3",
     "tqdm>=4.67.3",
 ]
+
+[project.scripts]
+biofeaturisers = "biofeaturisers.cli:main"
