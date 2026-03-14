@@ -2,7 +2,8 @@
 
 ## Objectives
 - Quantify correctness, throughput, latency, and memory for HDX and SAXS across mixed CPU/GPU clusters.
-- Validate scale limits and tuning levers (`chunk_size`, `batch_size`, hydration grid search) before external releases.
+- Validate scale limits and tuning levers (`chunk_size`, `batch_size`, hydration grid search, `bucket sizes`) before external releases.
+
 - Produce reproducible numbers for changelogs and regressions.
 
 ## Scenarios
