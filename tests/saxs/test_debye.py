@@ -6,9 +6,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from biofeaturisers.core.safe_math import safe_sinc
 from biofeaturisers.saxs.debye import saxs_six_partials
 from biofeaturisers.saxs.features import SAXSFeatures
+from tests.fixtures.numerical_helpers import dense_debye_reference
 
 
 def _make_features(simple_topology, simple_output_index, ff_vac, ff_excl, ff_water, q_values):
@@ -24,14 +24,6 @@ def _make_features(simple_topology, simple_output_index, ff_vac, ff_excl, ff_wat
         q_values=jnp.asarray(q_values, dtype=jnp.float32),
         chain_ids=np.asarray(["A"] * n_sel, dtype=str),
     )
-
-
-def _dense_debye(coords: jax.Array, ff: jax.Array, q_values: jax.Array) -> jax.Array:
-    diff = coords[:, None, :] - coords[None, :, :]
-    dist = jnp.sqrt(jnp.sum(diff * diff, axis=-1))
-    qr = q_values[None, None, :] * dist[:, :, None]
-    sinc_vals = safe_sinc(qr)
-    return jnp.sum(ff[:, None, :] * ff[None, :, :] * sinc_vals, axis=(0, 1))
 
 
 def test_two_atom_partial_matches_analytic(simple_topology, simple_output_index) -> None:
@@ -83,7 +75,7 @@ def test_chunk_size_independence_and_dense_match(simple_topology, simple_output_
 
     p2 = saxs_six_partials(coords=coords, features=features, chunk_size=2)[0]
     p4 = saxs_six_partials(coords=coords, features=features, chunk_size=4)[0]
-    dense = _dense_debye(coords=coords, ff=ff_vac, q_values=q_values)
+    dense = dense_debye_reference(coords=coords, ff=ff_vac, q_values=q_values)
 
     np.testing.assert_allclose(np.asarray(p2), np.asarray(p4), atol=1e-5)
     np.testing.assert_allclose(np.asarray(p2), np.asarray(dense), atol=1e-4)
@@ -149,4 +141,3 @@ def test_gradient_through_six_partials_is_finite(simple_topology, simple_output_
     )
     grad = jax.grad(lambda c: jnp.sum(saxs_six_partials(c, features, chunk_size=2)))(coords)
     assert np.isfinite(np.asarray(grad)).all()
-

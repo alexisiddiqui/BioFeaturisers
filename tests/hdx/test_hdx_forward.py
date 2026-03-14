@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import jax
@@ -74,6 +75,19 @@ def _amide_h_coords(coords: np.ndarray, features) -> np.ndarray:
     return np.where(amide_h_idx[:, None] >= 0, amide_h_obs, amide_h_synth)
 
 
+def _rotation_matrix_z(theta: float) -> np.ndarray:
+    c = float(np.cos(theta))
+    s = float(np.sin(theta))
+    return np.asarray(
+        [
+            [c, -s, 0.0],
+            [s, c, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+
+
 def test_hdx_forward_1ubq_hard_bv_correlation() -> None:
     atom_array = _load_1ubq_fragment()
     config = HDXConfig(steepness_c=50.0, steepness_h=50.0)
@@ -104,6 +118,43 @@ def test_hdx_forward_translation_invariance() -> None:
     np.testing.assert_allclose(np.asarray(base["Nc"]), np.asarray(moved["Nc"]), atol=1e-3)
     np.testing.assert_allclose(np.asarray(base["Nh"]), np.asarray(moved["Nh"]), atol=1e-3)
     np.testing.assert_allclose(np.asarray(base["ln_Pf"]), np.asarray(moved["ln_Pf"]), atol=1e-3)
+
+
+def test_hdx_forward_rotation_invariance() -> None:
+    atom_array = _load_1ubq_fragment()
+    config = HDXConfig()
+    features = featurise(atom_array, config=config)
+    coords = np.asarray(atom_array.coord, dtype=np.float32)
+
+    rot = _rotation_matrix_z(np.deg2rad(37.0))
+    rotated = coords @ rot.T
+
+    base = hdx_forward(jnp.asarray(coords, dtype=jnp.float32), features, config=config)
+    moved = hdx_forward(jnp.asarray(rotated, dtype=jnp.float32), features, config=config)
+    np.testing.assert_allclose(np.asarray(base["Nc"]), np.asarray(moved["Nc"]), atol=1e-3)
+    np.testing.assert_allclose(np.asarray(base["Nh"]), np.asarray(moved["Nh"]), atol=1e-3)
+    np.testing.assert_allclose(np.asarray(base["ln_Pf"]), np.asarray(moved["ln_Pf"]), atol=1e-3)
+
+
+def test_hdx_forward_beta0_intercept_with_zero_contact_masks() -> None:
+    atom_array = _load_1ubq_fragment()
+    config = HDXConfig(beta_0=2.25, beta_c=1.0, beta_h=2.0)
+    features = featurise(atom_array, config=config)
+    features_zero = replace(
+        features,
+        excl_mask_c=jnp.zeros_like(features.excl_mask_c),
+        excl_mask_h=jnp.zeros_like(features.excl_mask_h),
+    )
+    coords = jnp.asarray(atom_array.coord, dtype=jnp.float32)
+    result = hdx_forward(coords, features_zero, config=config)
+
+    np.testing.assert_allclose(np.asarray(result["Nc"]), np.zeros_like(np.asarray(result["Nc"])), atol=1e-6)
+    np.testing.assert_allclose(np.asarray(result["Nh"]), np.zeros_like(np.asarray(result["Nh"])), atol=1e-6)
+    np.testing.assert_allclose(
+        np.asarray(result["ln_Pf"]),
+        np.full_like(np.asarray(result["ln_Pf"]), fill_value=np.float32(config.beta_0)),
+        atol=1e-6,
+    )
 
 
 def test_hdx_forward_chunked_fallback_matches_dense() -> None:

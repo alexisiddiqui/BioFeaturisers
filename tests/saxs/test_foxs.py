@@ -6,10 +6,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from biofeaturisers.core.safe_math import safe_sinc
 from biofeaturisers.saxs.debye import saxs_six_partials
 from biofeaturisers.saxs.features import SAXSFeatures
 from biofeaturisers.saxs.foxs import saxs_combine, saxs_forward, saxs_trajectory
+from tests.fixtures.numerical_helpers import (
+    assert_directional_gradient_close,
+    dense_debye_reference,
+)
 
 
 def _make_features(simple_topology, simple_output_index, ff_vac, ff_excl, ff_water, q_values):
@@ -27,13 +30,6 @@ def _make_features(simple_topology, simple_output_index, ff_vac, ff_excl, ff_wat
     )
 
 
-def _dense_debye(coords: jax.Array, ff: jax.Array, q_values: jax.Array) -> jax.Array:
-    diff = coords[:, None, :] - coords[None, :, :]
-    dist = jnp.sqrt(jnp.sum(diff * diff, axis=-1))
-    qr = q_values[None, None, :] * dist[:, :, None]
-    return jnp.sum(ff[:, None, :] * ff[None, :, :] * safe_sinc(qr), axis=(0, 1))
-
-
 def test_combine_polynomial_identity_and_gradients() -> None:
     partials = jnp.asarray([[10.0], [3.0], [1.0], [4.0], [2.0], [0.5]], dtype=jnp.float32)
     c1, c2 = 1.05, 2.0
@@ -44,6 +40,10 @@ def test_combine_polynomial_identity_and_gradients() -> None:
     d_dc1 = jax.grad(lambda x: saxs_combine(partials, c1=x, c2=c2).sum())(jnp.float32(c1))
     expected_dc1 = -4.0 + 2.0 * c1 * 3.0 - c2 * 0.5
     np.testing.assert_allclose(np.asarray(d_dc1), np.asarray(expected_dc1, dtype=np.float32), atol=1e-6)
+
+    d_dc2 = jax.grad(lambda x: saxs_combine(partials, c1=c1, c2=x).sum())(jnp.float32(c2))
+    expected_dc2 = 2.0 - c1 * 0.5 + 2.0 * c2 * 1.0
+    np.testing.assert_allclose(np.asarray(d_dc2), np.asarray(expected_dc2, dtype=np.float32), atol=1e-6)
 
 
 def test_vacuum_only_reduces_to_debye(simple_topology, simple_output_index) -> None:
@@ -70,7 +70,7 @@ def test_vacuum_only_reduces_to_debye(simple_topology, simple_output_index) -> N
 
     partials = saxs_six_partials(coords, features, chunk_size=2)
     combined = saxs_combine(partials, c1=0.0, c2=0.0)
-    dense = _dense_debye(coords=coords, ff=ff_vac, q_values=q_values)
+    dense = dense_debye_reference(coords=coords, ff=ff_vac, q_values=q_values)
     forward = saxs_forward(coords=coords, features=features, c1=0.0, c2=0.0, chunk_size=2)
 
     np.testing.assert_allclose(np.asarray(combined), np.asarray(dense), atol=1e-4)
@@ -117,3 +117,115 @@ def test_trajectory_translation_invariance(simple_topology, simple_output_index)
     )
     np.testing.assert_allclose(np.asarray(single), np.asarray(averaged), atol=1e-5)
 
+
+def test_six_partials_permutation_invariance(simple_topology, simple_output_index) -> None:
+    coords = jnp.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.1, 0.2, -0.1],
+            [2.3, -0.4, 0.2],
+            [3.0, 0.7, 0.3],
+        ],
+        dtype=jnp.float32,
+    )
+    q_values = jnp.linspace(0.02, 0.4, 8, dtype=jnp.float32)
+    ff_vac = jnp.asarray(np.linspace(0.8, 1.2, 32, dtype=np.float32).reshape(4, 8))
+    ff_excl = ff_vac * 0.3
+    ff_water = ff_vac * 0.1
+
+    features = _make_features(
+        simple_topology=simple_topology,
+        simple_output_index=simple_output_index,
+        ff_vac=ff_vac,
+        ff_excl=ff_excl,
+        ff_water=ff_water,
+        q_values=q_values,
+    )
+    partials = saxs_six_partials(coords=coords, features=features, chunk_size=2)
+
+    perm = np.asarray([2, 0, 3, 1], dtype=np.int32)
+    features_perm = _make_features(
+        simple_topology=simple_topology,
+        simple_output_index=simple_output_index,
+        ff_vac=ff_vac[perm],
+        ff_excl=ff_excl[perm],
+        ff_water=ff_water[perm],
+        q_values=q_values,
+    )
+    partials_perm = saxs_six_partials(coords=coords[perm], features=features_perm, chunk_size=2)
+    np.testing.assert_allclose(np.asarray(partials_perm), np.asarray(partials), atol=1e-5)
+
+
+def test_six_partials_gradient_matches_fd_directions(simple_topology, simple_output_index) -> None:
+    coords = jnp.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.4, 0.1, -0.1],
+            [2.1, 0.9, 0.2],
+        ],
+        dtype=jnp.float32,
+    )
+    q_values = jnp.linspace(0.01, 0.3, 6, dtype=jnp.float32)
+    ff_vac = jnp.asarray(
+        [
+            [1.0, 0.95, 0.9, 0.82, 0.75, 0.7],
+            [0.9, 0.88, 0.81, 0.76, 0.71, 0.66],
+            [0.85, 0.81, 0.78, 0.74, 0.69, 0.65],
+        ],
+        dtype=jnp.float32,
+    )
+    ff_excl = ff_vac * 0.25
+    ff_water = ff_vac * 0.08
+    features = _make_features(
+        simple_topology=simple_topology,
+        simple_output_index=simple_output_index,
+        ff_vac=ff_vac,
+        ff_excl=ff_excl,
+        ff_water=ff_water,
+        q_values=q_values,
+    )
+
+    loss = lambda c: jnp.sum(saxs_six_partials(c, features, chunk_size=2))
+    assert_directional_gradient_close(loss, coords, n_dirs=3, seed=11, rtol=5e-2, atol=2e-4)
+
+
+def test_colocated_atoms_partial_decomposition_identity(simple_topology, simple_output_index) -> None:
+    n_atoms = 3
+    q_values = jnp.linspace(0.02, 0.2, 5, dtype=jnp.float32)
+    coords = jnp.zeros((n_atoms, 3), dtype=jnp.float32)
+    ff_vac = jnp.asarray(
+        [
+            [1.0, 0.9, 0.8, 0.7, 0.6],
+            [0.8, 0.7, 0.6, 0.5, 0.4],
+            [0.6, 0.5, 0.4, 0.3, 0.2],
+        ],
+        dtype=jnp.float32,
+    )
+    ff_excl = ff_vac * 0.5
+    ff_water = ff_vac * 0.2
+    features = _make_features(
+        simple_topology=simple_topology,
+        simple_output_index=simple_output_index,
+        ff_vac=ff_vac,
+        ff_excl=ff_excl,
+        ff_water=ff_water,
+        q_values=q_values,
+    )
+    partials = saxs_six_partials(coords=coords, features=features, chunk_size=2)
+    partials_np = np.asarray(partials)
+
+    sum_v = np.sum(np.asarray(ff_vac), axis=0)
+    sum_e = np.sum(np.asarray(ff_excl), axis=0)
+    sum_s = np.sum(np.asarray(ff_water), axis=0)
+    np.testing.assert_allclose(partials_np[0], sum_v**2, atol=1e-5)
+    np.testing.assert_allclose(partials_np[1], sum_e**2, atol=1e-5)
+    np.testing.assert_allclose(partials_np[2], sum_s**2, atol=1e-5)
+    np.testing.assert_allclose(partials_np[3], 2.0 * sum_v * sum_e, atol=1e-5)
+    np.testing.assert_allclose(partials_np[4], 2.0 * sum_v * sum_s, atol=1e-5)
+    np.testing.assert_allclose(partials_np[5], 2.0 * sum_e * sum_s, atol=1e-5)
+
+    c1, c2 = 1.03, 1.7
+    combined = np.asarray(saxs_combine(partials, c1=c1, c2=c2))
+    ff_eff = np.asarray(ff_vac) - c1 * np.asarray(ff_excl) + c2 * np.asarray(ff_water)
+    dense = np.asarray(dense_debye_reference(coords=coords, ff=jnp.asarray(ff_eff), q_values=q_values))
+    np.testing.assert_allclose(combined, dense, atol=1e-5)
