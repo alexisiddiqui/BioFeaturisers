@@ -1,2 +1,1 @@
-# Uses 1UBQ - delete solvent atoms but keep hydrogens.
-
+# Uses 5PTI - delete solvent atoms but keep hydrogens.

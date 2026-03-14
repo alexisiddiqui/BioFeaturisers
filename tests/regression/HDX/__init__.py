@@ -1,0 +1,2 @@
+"""SAXS tests package."""
+
