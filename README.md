@@ -52,7 +52,20 @@ Experimental format readers are available in `biofeaturisers.io.formats`:
 - SAXS: `.dat`, `.fit`, `.csv`
 - HDX: `.csv`
 
+## Testing
+
+Run the default fast suite:
+
+```bash
+pytest -q
+```
+
+Run optional heavy stress/JIT suites:
+
+```bash
+BIOFEATURISERS_RUN_SLOW=1 pytest -q tests/stress tests/jit
+```
+
 ## Future Work
 
 - [ ] Research dSASA - need to check this
-

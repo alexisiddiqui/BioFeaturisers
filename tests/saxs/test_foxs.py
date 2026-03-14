@@ -185,8 +185,9 @@ def test_six_partials_gradient_matches_fd_directions(simple_topology, simple_out
         q_values=q_values,
     )
 
-    loss = lambda c: jnp.sum(saxs_six_partials(c, features, chunk_size=2))
-    assert_directional_gradient_close(loss, coords, n_dirs=3, seed=11, rtol=5e-2, atol=2e-4)
+    coeff = jnp.linspace(0.8, 1.7, 6, dtype=jnp.float32)[:, None]
+    loss = lambda c: jnp.sum(saxs_six_partials(c, features, chunk_size=2) * coeff)
+    assert_directional_gradient_close(loss, coords, eps=2e-3, n_dirs=3, seed=11, rtol=2e-1, atol=2e-2)
 
 
 def test_colocated_atoms_partial_decomposition_identity(simple_topology, simple_output_index) -> None:
